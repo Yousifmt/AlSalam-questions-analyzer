@@ -141,12 +141,13 @@ export default function Header({
               <span className="hidden md:inline">Filters</span>
             </Button>
 
-            <div className="relative flex-grow w-full">
+            {/* === Search bar: أصغر ومرن للموبايل والديسكتوب === */}
+            <div className="relative flex-1 w-full max-w-full md:max-w-xl">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
               <Input
                 type="text"
                 placeholder="Search questions..."
-                className={cn("pl-10 pr-10", inputStrong)}
+                className={cn("w-full pl-10 pr-10", inputStrong)}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 disabled={isExamMode}

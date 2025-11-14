@@ -28,8 +28,6 @@ import {
 import Footer from "@/components/qbank/footer";
 
 const EXAM_QUESTION_COUNT = 90;
-
-// 🔹 use one source of truth for “recent”
 const RECENT_DAYS = 10;
 
 export type ExamMode = "during" | "after";
@@ -43,7 +41,6 @@ const initialFilters = {
   recentOnly: false,
 };
 
-// Normalize createdAt to JS Date (supports Firestore Timestamp or string/date)
 const getCreatedAtDate = (val: any): Date | null => {
   if (!val) return null;
   if (typeof val?.toDate === "function") {
@@ -73,7 +70,6 @@ export default function Home() {
   const [isFilterSheetOpen, setIsFilterSheetOpen] = React.useState(false);
   const [isHeaderVisible, setIsHeaderVisible] = React.useState(true);
 
-  // Exam State
   const [isExamMode, setIsExamMode] = React.useState(false);
   const [isExamOptionsDialogOpen, setIsExamOptionsDialogOpen] = React.useState(false);
   const [examAnswerMode, setExamAnswerMode] = React.useState<ExamMode>("during");
@@ -87,7 +83,6 @@ export default function Home() {
 
   const [savedQuestionIds, setSavedQuestionIds] = React.useState<string[]>([]);
 
-  // Fetch questions from Firestore
   const fetchQuestions = React.useCallback(async () => {
     setIsLoading(true);
     try {
@@ -109,7 +104,6 @@ export default function Home() {
     fetchQuestions();
   }, [fetchQuestions]);
 
-  // Get all chapters sorted numerically
   const allChapters = React.useMemo(() => {
     const chapters = new Set<string>();
     questions.forEach((q) => q.chapter && chapters.add(q.chapter));
@@ -122,9 +116,8 @@ export default function Home() {
     return Array.from(chapters).sort((a, b) => getChapterNumber(a) - getChapterNumber(b));
   }, [questions]);
 
-  // Apply filters, search, and sorting
   React.useEffect(() => {
-    if (isExamMode) return; // Skip filtering during exam mode
+    if (isExamMode) return;
 
     let tempQuestions = [...questions];
 
@@ -133,12 +126,10 @@ export default function Home() {
       return match ? parseInt(match[1], 10) : Infinity;
     };
 
-    // 1) Sort by chapter for quiz slicing
     const chapterSortedQuestions = [...tempQuestions].sort(
       (a, b) => getChapterNumber(a.chapter) - getChapterNumber(b.chapter)
     );
 
-    // 2) Apply quiz filter
     if (filters.quiz !== "all") {
       const quizNumber = parseInt(filters.quiz.replace("quiz", ""), 10);
 
@@ -174,7 +165,6 @@ export default function Home() {
       tempQuestions = chapterSortedQuestions;
     }
 
-    // 3) Filter recentOnly (last 10 days)  🔽
     if (filters.recentOnly) {
       const cutoff = new Date(Date.now() - RECENT_DAYS * 24 * 60 * 60 * 1000);
       tempQuestions = tempQuestions.filter((q) => {
@@ -183,26 +173,24 @@ export default function Home() {
       });
     }
 
-    // 4) Search query
     if (searchQuery) {
       const sq = searchQuery.toLowerCase();
       tempQuestions = tempQuestions.filter((q) => q.questionText?.toLowerCase().includes(sq));
     }
 
-    // 5) Saved only
     if (filters.showSavedOnly) {
       tempQuestions = tempQuestions.filter((q) => savedQuestionIds.includes(q.id));
     }
 
-    // 6) Chapter & Type filters
     if (filters.chapter.length > 0) {
       tempQuestions = tempQuestions.filter((q) => filters.chapter.includes(q.chapter));
     }
     if (filters.questionType.length > 0) {
-      tempQuestions = tempQuestions.filter((q) => filters.questionType.includes(q.questionType));
+      tempQuestions = tempQuestions.filter((q) =>
+        filters.questionType.includes(q.questionType)
+      );
     }
 
-    // 7) Final sorting
     const sortedQuestions = [...tempQuestions].sort((a, b) => {
       switch (sort) {
         case "chapter_desc":
@@ -211,15 +199,14 @@ export default function Home() {
           return Math.random() - 0.5;
         case "chapter_asc":
         default:
-          return 0; // keep current order
+          return 0;
       }
     });
 
     setFilteredQuestions(sortedQuestions);
-    setUserAnswers({}); // Reset answers when filters change
+    setUserAnswers({});
   }, [searchQuery, filters, questions, sort, isExamMode, savedQuestionIds]);
 
-  // Scroll listener for back-to-top button
   React.useEffect(() => {
     const onWinScroll = () => setShowBackToTop(window.scrollY > 200);
     window.addEventListener("scroll", onWinScroll, { passive: true });
@@ -231,7 +218,6 @@ export default function Home() {
     setIsExplanationPanelOpen(true);
   };
 
-  // Exam handlers
   const startExam = (mode: ExamMode) => {
     const shuffled = [...questions].sort(() => 0.5 - Math.random());
     const examQuestions = shuffled.slice(0, EXAM_QUESTION_COUNT);
@@ -329,7 +315,10 @@ export default function Home() {
 
   return (
     <LockProvider>
-      <div className="flex min-h-screen w-full bg-background text-foreground" ref={pageRef}>
+      <div
+        className="flex min-h-screen w-full max-w-full overflow-x-hidden bg-background text-foreground"
+        ref={pageRef}
+      >
         <FilterSheet
           isOpen={isFilterSheetOpen}
           setIsOpen={setIsFilterSheetOpen}
@@ -342,12 +331,12 @@ export default function Home() {
           onClearAll={clearAllFilters}
         />
 
-        <div className="flex-1 flex flex-col">
+        <div className="flex-1 flex flex-col w-full max-w-full overflow-x-hidden">
           {/* Header */}
-          <div className="sticky top-0 z-30">
+          <div className="sticky top-0 z-30 w-full">
             <div
               className={cn(
-                "transition-all duration-300 ease-in-out relative",
+                "transition-all duration-300 ease-in-out relative w-full",
                 isMobile && !isHeaderVisible ? "h-0 overflow-hidden" : "h-auto"
               )}
             >
@@ -394,7 +383,7 @@ export default function Home() {
           </div>
 
           {/* Main Content */}
-          <main className="flex-1">
+          <main className="flex-1 w-full max-w-full overflow-x-hidden">
             {isLoading ? (
               <div className="p-4 space-y-4 max-w-full lg:max-w-screen-lg mx-auto">
                 <Skeleton className="h-32 w-full" />
