@@ -39,14 +39,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-/**
- * Header: Visible essentials + mobile-friendly dropdown for unlocked tools
- * - Keep Show Answers, Theme, Lock buttons visible at all times
- * - Unlocked-only tools (Add/Export/Categorize/Duplicates) go into ⋮ dropdown
- * - Stronger borders for outline buttons + search input (dark BG visibility)
- * - Dropdown styled to react to dark/light mode and look great on phones
- */
-
 const outlineStrong =
   "border-foreground/30 hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-primary/40";
 const inputStrong =
@@ -141,13 +133,12 @@ export default function Header({
               <span className="hidden md:inline">Filters</span>
             </Button>
 
-            {/* === Search bar: أصغر ومرن للموبايل والديسكتوب === */}
-            <div className="relative flex-1 w-full max-w-full md:max-w-xl">
+            <div className="relative flex-grow w-full">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
               <Input
                 type="text"
                 placeholder="Search questions..."
-                className={cn("w-full pl-10 pr-10", inputStrong)}
+                className={cn("pl-10 pr-10", inputStrong)}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 disabled={isExamMode}
@@ -165,6 +156,7 @@ export default function Header({
               )}
             </div>
 
+            {/* Desktop question count */}
             <span
               className={cn(
                 "text-xs sm:text-sm text-foreground whitespace-nowrap hidden md:inline-block",
@@ -173,126 +165,140 @@ export default function Header({
             >
               {isExamMode
                 ? "Exam Mode"
-                : `${questionCount} ${questionCount === 1 ? "question" : "questions"}`}
+                : `${questionCount} ${
+                    questionCount === 1 ? "question" : "questions"
+                  }`}
             </span>
           </div>
         </div>
 
         {/* Right: Primary CTAs + essentials + unlocked dropdown */}
-        <div className="w-full md:w-auto flex items-center justify-end gap-2">
-          {isExamMode ? (
-            <Button onClick={onResetView} variant="destructive" size="sm">
-              <RefreshCcw className="h-4 w-4 md:mr-2" />
-              <span className="hidden md:inline">Reset View</span>
-              <span className="md:hidden">Reset</span>
-            </Button>
-          ) : (
-            <Button onClick={onGenerateExam} className="font-semibold" size="sm">
-              <FileText className="h-4 w-4 md:mr-2" />
-              <span className="hidden md:inline">Generate Exam</span>
-              <span className="md:hidden">Exam</span>
-            </Button>
-          )}
-
-          {/* Visible: Show/Hide Answers */}
-          <Button
-            variant="outline"
-            size="sm"
-            className={outlineStrong}
-            onClick={handleToggleAnswers}
-            disabled={isExamMode}
-          >
-            {showAllAnswers ? (
-              <EyeOff className="h-4 w-4 md:mr-2" />
+        <div className="w-full md:w-auto flex flex-col md:flex-row items-end md:items-center justify-end gap-1 md:gap-2">
+          {/* Buttons row (same الترتيب السابق) */}
+          <div className="flex w-full md:w-auto items-center justify-end gap-2">
+            {isExamMode ? (
+              <Button onClick={onResetView} variant="destructive" size="sm">
+                <RefreshCcw className="h-4 w-4 md:mr-2" />
+                <span className="hidden md:inline">Reset View</span>
+                <span className="md:hidden">Reset</span>
+              </Button>
             ) : (
-              <Eye className="h-4 w-4 md:mr-2" />
+              <Button onClick={onGenerateExam} className="font-semibold" size="sm">
+                <FileText className="h-4 w-4 md:mr-2" />
+                <span className="hidden md:inline">Generate Exam</span>
+                <span className="md:hidden">Exam</span>
+              </Button>
             )}
-            <span>{showAllAnswers ? "Hide Answers" : "Show Answers"}</span>
-          </Button>
 
-          {/* Visible: Theme toggle */}
-          <Button
-            variant="outline"
-            size="sm"
-            className={cn("w-auto", outlineStrong)}
-            onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-          >
-            {mounted && theme === "dark" ? (
-              <Sun className="h-[1.2rem] w-[1.2rem]" />
-            ) : (
-              <Moon className="h-[1.2rem] w-[1.2rem]" />
-            )}
-            <span className="ml-2">
-              {mounted ? (theme === "dark" ? "Light" : "Dark") : "..."}
-            </span>
-          </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className={outlineStrong}
+              onClick={handleToggleAnswers}
+              disabled={isExamMode}
+            >
+              {showAllAnswers ? (
+                <EyeOff className="h-4 w-4 md:mr-2" />
+              ) : (
+                <Eye className="h-4 w-4 md:mr-2" />
+              )}
+              <span>{showAllAnswers ? "Hide Answers" : "Show Answers"}</span>
+            </Button>
 
-          {/* Visible: Lock/Unlock */}
-          <Button
-            variant="outline"
-            size="icon"
-            className={cn("w-9 h-9", outlineStrong)}
-            onClick={() => setIsUnlockDialogOpen(true)}
-            aria-label="Toggle lock"
-          >
-            {isLocked ? <Lock /> : <Unlock />}
-          </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className={cn("w-auto", outlineStrong)}
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+            >
+              {mounted && theme === "dark" ? (
+                <Sun className="h-[1.2rem] w-[1.2rem]" />
+              ) : (
+                <Moon className="h-[1.2rem] w-[1.2rem]" />
+              )}
+              <span className="ml-2">
+                {mounted ? (theme === "dark" ? "Light" : "Dark") : "..."}
+              </span>
+            </Button>
 
-          {/* Unlocked-only tools inside dropdown */}
-          {!isLocked && !isExamMode && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  className={cn("w-9 h-9", outlineStrong)}
-                  aria-label="Open actions"
-                >
-                  <EllipsisVertical className="h-5 w-5" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                align="end"
-                sideOffset={8}
-                className={cn(
-                  "w-64 md:w-60 max-h-[70vh] overflow-auto border-border/40",
-                  "rounded-lg md:rounded-xl p-1 shadow-lg",
-                  // reactive to theme via shadcn tokens
-                  "bg-popover text-popover-foreground"
-                )}
-              >
-                <DropdownMenuLabel className="text-xs uppercase tracking-wide opacity-80">
-                  Question tools
-                </DropdownMenuLabel>
+            <Button
+              variant="outline"
+              size="icon"
+              className={cn("w-9 h-9", outlineStrong)}
+              onClick={() => setIsUnlockDialogOpen(true)}
+              aria-label="Toggle lock"
+            >
+              {isLocked ? <Lock /> : <Unlock />}
+            </Button>
 
-                <DropdownMenuItem onSelect={() => setIsPasteDialogOpen(true)}>
-                  <PlusCircle className="mr-2 h-4 w-4" /> Add questions
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={handleExportClick}>
-                  <Download className="mr-2 h-4 w-4" /> Export
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => router.push("/categorize")}>
-                  <Wand2 className="mr-2 h-4 w-4" /> Batch categorize
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => router.push("/duplicates")}>
-                  <CopyCheck className="mr-2 h-4 w-4" /> Show duplicates
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-
-                <DropdownMenuItem onSelect={() => setIsUnlockDialogOpen(true)}>
-                  {isLocked ? (
-                    <>
-                      <Unlock className="mr-2 h-4 w-4" /> Unlock features…
-                    </>
-                  ) : (
-                    <>
-                      <Lock className="mr-2 h-4 w-4" /> Lock editing
-                    </>
+            {!isLocked && !isExamMode && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className={cn("w-9 h-9", outlineStrong)}
+                    aria-label="Open actions"
+                  >
+                    <EllipsisVertical className="h-5 w-5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  align="end"
+                  sideOffset={8}
+                  className={cn(
+                    "w-64 md:w-60 max-h-[70vh] overflow-auto border-border/40",
+                    "rounded-lg md:rounded-xl p-1 shadow-lg",
+                    "bg-popover text-popover-foreground"
                   )}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+                >
+                  <DropdownMenuLabel className="text-xs uppercase tracking-wide opacity-80">
+                    Question tools
+                  </DropdownMenuLabel>
+
+                  <DropdownMenuItem onSelect={() => setIsPasteDialogOpen(true)}>
+                    <PlusCircle className="mr-2 h-4 w-4" /> Add questions
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={handleExportClick}>
+                    <Download className="mr-2 h-4 w-4" /> Export
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => router.push("/categorize")}>
+                    <Wand2 className="mr-2 h-4 w-4" /> Batch categorize
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => router.push("/duplicates")}>
+                    <CopyCheck className="mr-2 h-4 w-4" /> Show duplicates
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+
+                  <DropdownMenuItem onSelect={() => setIsUnlockDialogOpen(true)}>
+                    {isLocked ? (
+                      <>
+                        <Unlock className="mr-2 h-4 w-4" /> Unlock features…
+                      </>
+                    ) : (
+                      <>
+                        <Lock className="mr-2 h-4 w-4" /> Lock editing
+                      </>
+                    )}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </div>
+
+          {/* Mobile question count تحت زر Exam مباشرة */}
+          <span
+            className={cn(
+              "text-xs text-foreground md:hidden",
+              { "font-bold text-primary": isExamMode }
+            )}
+          >
+            {isExamMode
+              ? "Exam Mode"
+              : `${questionCount} ${
+                  questionCount === 1 ? "question" : "questions"
+                }`}
+          </span>
         </div>
       </header>
 
