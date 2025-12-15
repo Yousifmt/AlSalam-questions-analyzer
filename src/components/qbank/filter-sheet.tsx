@@ -1,3 +1,4 @@
+// src/components/qbank/filter-sheet.tsx
 "use client";
 
 import * as React from "react";
@@ -15,7 +16,6 @@ import { Filter, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "../ui/button";
 
-// نفس النوع المستخدم في Home
 export type SortType = "chapter_asc" | "chapter_desc" | "random";
 
 type FilterSheetProps = {
@@ -24,8 +24,8 @@ type FilterSheetProps = {
   filters: any;
   setFilters: (filters: any) => void;
   chapters: string[];
-  sort: SortType; // <-- استخدم SortType بدل string
-  setSort: React.Dispatch<React.SetStateAction<SortType>>; // <-- Dispatch متوافق مع useState
+  sort: SortType;
+  setSort: React.Dispatch<React.SetStateAction<SortType>>;
   disabled?: boolean;
   onClearAll: () => void;
 };
@@ -62,18 +62,13 @@ export default function FilterSheet({
             setFilters={setFilters}
             chapters={chapters}
             sort={sort}
-            setSort={setSort} // يمرّر الـ Dispatch كما هو
+            setSort={setSort}
             onCloseSheet={() => setIsOpen(false)}
           />
         </ScrollArea>
 
         <SheetFooter className="p-4 border-t border-border bg-background">
-          <Button
-            variant="outline"
-            className="w-full"
-            onClick={onClearAll}
-            disabled={disabled}
-          >
+          <Button variant="outline" className="w-full" onClick={onClearAll} disabled={disabled}>
             <X className="mr-2 h-4 w-4" />
             Clear All Filters
           </Button>

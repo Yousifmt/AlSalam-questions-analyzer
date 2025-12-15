@@ -1,15 +1,15 @@
+// src/components/qbank/filter-panel.tsx
 "use client";
 
+import * as React from "react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { ScrollArea } from "../ui/scroll-area";
-import * as React from "react";
 import type { SortType } from "./filter-sheet";
 
-// keep in sync with page.tsx
 const RECENT_DAYS = 10;
 
 const questionTypes = [
@@ -54,7 +54,7 @@ export default function FilterPanel({
 
   const handleSwitchChange = (filterName: string, checked: boolean) => {
     setFilters({ ...filters, [filterName]: checked });
-    if (filterName === "showSavedOnly" || filterName === "recentOnly") {
+    if (filterName === "showSavedOnly" || filterName === "recentOnly" || filterName === "groupSimilarOptions") {
       onCloseSheet();
     }
   };
@@ -100,6 +100,23 @@ export default function FilterPanel({
 
       <Separator />
 
+      {/* ✅ Similar Options Toggle */}
+      <div className="flex items-center justify-between rounded-lg border p-3 shadow-sm">
+        <Label htmlFor="group-similar" className="flex flex-col space-y-1">
+          <span>Group Similar Options</span>
+          <span className="font-normal leading-snug text-gray-400">
+            Group questions that contain similar choices, and keep the closest ones next to each other.
+          </span>
+        </Label>
+        <Switch
+          id="group-similar"
+          checked={!!filters.groupSimilarOptions}
+          onCheckedChange={(checked) => handleSwitchChange("groupSimilarOptions", checked)}
+        />
+      </div>
+
+      <Separator />
+
       <div className="space-y-3">
         <Label className="font-semibold text-foreground">Chapter</Label>
         <ScrollArea className="h-60 w-full rounded-md border p-2">
@@ -116,9 +133,7 @@ export default function FilterPanel({
                 </Label>
               </div>
             ))}
-            {chapters.length === 0 && (
-              <p className="text-xs text-gray-400">No chapters found.</p>
-            )}
+            {chapters.length === 0 && <p className="text-xs text-gray-400">No chapters found.</p>}
           </div>
         </ScrollArea>
       </div>
@@ -128,7 +143,6 @@ export default function FilterPanel({
       <div className="space-y-3">
         <Label className="font-semibold text-foreground">Status & Type</Label>
 
-        {/* Saved Questions */}
         <div className="flex items-center justify-between rounded-lg border p-3 shadow-sm">
           <Label htmlFor="saved-only" className="flex flex-col space-y-1">
             <span>Saved Questions</span>
@@ -143,7 +157,6 @@ export default function FilterPanel({
           />
         </div>
 
-        {/* Latest Added (Last 10 Days)  🔽 */}
         <div className="flex items-center justify-between rounded-lg border p-3 shadow-sm">
           <Label htmlFor="recent-only" className="flex flex-col space-y-1">
             <span>Latest Added (Last {RECENT_DAYS} Days)</span>
@@ -158,7 +171,6 @@ export default function FilterPanel({
           />
         </div>
 
-        {/* Types */}
         <div className="space-y-2 pt-2">
           {questionTypes.map((type) => (
             <div key={type.id} className="flex items-center space-x-2">

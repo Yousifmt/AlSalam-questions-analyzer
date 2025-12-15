@@ -1,3 +1,4 @@
+// src/app/page.tsx
 "use client";
 
 import * as React from "react";
@@ -27,6 +28,13 @@ import {
 } from "@/components/ui/alert-dialog";
 import Footer from "@/components/qbank/footer";
 
+import {
+  getSimilarOptionsMeta,
+  extractOptions,
+  diceSimilarity,
+  normalizeText,
+} from "@/components/qbank/similar-options";
+
 const EXAM_QUESTION_COUNT = 90;
 const RECENT_DAYS = 10;
 
@@ -39,6 +47,9 @@ const initialFilters = {
   showSavedOnly: false,
   quiz: "all",
   recentOnly: false,
+
+  // ✅ NEW toggle
+  groupSimilarOptions: false,
 };
 
 const getCreatedAtDate = (val: any): Date | null => {
@@ -52,6 +63,11 @@ const getCreatedAtDate = (val: any): Date | null => {
   }
   const d = new Date(val);
   return isNaN(d.getTime()) ? null : d;
+};
+
+const getChapterNumber = (chapterString: string) => {
+  const match = chapterString?.match?.(/Chapter (\d+)/);
+  return match ? parseInt(match[1], 10) : Infinity;
 };
 
 export default function Home() {
@@ -107,67 +123,202 @@ export default function Home() {
   const allChapters = React.useMemo(() => {
     const chapters = new Set<string>();
     questions.forEach((q) => q.chapter && chapters.add(q.chapter));
-
-    const getChapterNumber = (chapterString: string) => {
-      const match = chapterString?.match?.(/Chapter (\d+)/);
-      return match ? parseInt(match[1], 10) : Infinity;
-    };
-
     return Array.from(chapters).sort((a, b) => getChapterNumber(a) - getChapterNumber(b));
   }, [questions]);
+
+  // meta: similar options inside same question
+  const similarMetaById = React.useMemo(() => {
+    const map = new Map<string, ReturnType<typeof getSimilarOptionsMeta>>();
+    for (const q of questions) map.set(q.id, getSimilarOptionsMeta(q));
+    return map;
+  }, [questions]);
+
+  // options only (normalized) for question-to-question similarity
+  const optionsById = React.useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const q of questions) {
+      const opts = extractOptions(q).map((s) => normalizeText(s)).filter(Boolean);
+      map.set(q.id, opts);
+    }
+    return map;
+  }, [questions]);
+
+  const questionSimilarity = React.useCallback(
+    (a: Question, b: Question) => {
+      const A = optionsById.get(a.id) ?? [];
+      const B = optionsById.get(b.id) ?? [];
+      if (A.length === 0 || B.length === 0) return 0;
+
+      const bestAvg = (X: string[], Y: string[]) => {
+        let sum = 0;
+        for (const x of X) {
+          let best = 0;
+          for (const y of Y) {
+            const s = diceSimilarity(x, y);
+            if (s > best) best = s;
+          }
+          sum += best;
+        }
+        return sum / X.length;
+      };
+
+      const s1 = bestAvg(A, B);
+      const s2 = bestAvg(B, A);
+      return (s1 + s2) / 2;
+    },
+    [optionsById]
+  );
+
+  const randomSeed = React.useMemo(
+    () =>
+      [
+        filters.quiz,
+        searchQuery,
+        filters.chapter.join(","),
+        filters.questionType.join(","),
+        String(filters.recentOnly),
+        String(filters.showSavedOnly),
+        String(filters.groupSimilarOptions),
+        sort,
+      ].join("|"),
+    [
+      filters.quiz,
+      searchQuery,
+      filters.chapter,
+      filters.questionType,
+      filters.recentOnly,
+      filters.showSavedOnly,
+      filters.groupSimilarOptions,
+      sort,
+    ]
+  );
+
+  const seededShuffle = React.useCallback((arr: Question[], seed: string) => {
+    let h = 2166136261;
+    for (let i = 0; i < seed.length; i++) {
+      h ^= seed.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    const rnd = () => {
+      h += 0x6d2b79f5;
+      let t = Math.imul(h ^ (h >>> 15), 1 | h);
+      t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+
+    const copy = [...arr];
+    for (let i = copy.length - 1; i > 0; i--) {
+      const j = Math.floor(rnd() * (i + 1));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy;
+  }, []);
+
+  const sortWithin = React.useCallback(
+    (arr: Question[]) => {
+      if (sort === "random") return seededShuffle(arr, randomSeed);
+      if (sort === "chapter_desc") {
+        return [...arr].sort((a, b) => getChapterNumber(b.chapter) - getChapterNumber(a.chapter));
+      }
+      return arr;
+    },
+    [sort, seededShuffle, randomSeed]
+  );
+
+  // nearest-neighbor order for similar bucket (options-only)
+  const orderSimilarQuestions = React.useCallback(
+    (arr: Question[]) => {
+      if (arr.length <= 2) return arr;
+
+      const byId = new Map(arr.map((q) => [q.id, q]));
+      const remaining = new Set(arr.map((q) => q.id));
+      const out: Question[] = [];
+
+      const pickBestStart = () => {
+        let bestId: string | null = null;
+        let bestScore = -1;
+        for (const id of remaining) {
+          const s = similarMetaById.get(id)?.maxSimilarity ?? 0;
+          if (s > bestScore) {
+            bestScore = s;
+            bestId = id;
+          }
+        }
+        return bestId ? byId.get(bestId)! : byId.get([...remaining][0])!;
+      };
+
+      while (remaining.size) {
+        let current = pickBestStart();
+        out.push(current);
+        remaining.delete(current.id);
+
+        while (remaining.size) {
+          let bestNext: Question | null = null;
+          let bestSim = -1;
+
+          for (const id of remaining) {
+            const cand = byId.get(id)!;
+            const sim = questionSimilarity(current, cand);
+            if (sim > bestSim) {
+              bestSim = sim;
+              bestNext = cand;
+            }
+          }
+
+          if (!bestNext) break;
+          out.push(bestNext);
+          remaining.delete(bestNext.id);
+          current = bestNext;
+        }
+      }
+
+      if (sort === "random") return seededShuffle(out, randomSeed);
+      return out;
+    },
+    [questionSimilarity, similarMetaById, sort, seededShuffle, randomSeed]
+  );
 
   React.useEffect(() => {
     if (isExamMode) return;
 
-    let tempQuestions = [...questions];
-
-    const getChapterNumber = (chapterString: string) => {
-      const match = chapterString?.match?.(/Chapter (\d+)/);
-      return match ? parseInt(match[1], 10) : Infinity;
-    };
-
-    const chapterSortedQuestions = [...tempQuestions].sort(
+    const chapterSorted = [...questions].sort(
       (a, b) => getChapterNumber(a.chapter) - getChapterNumber(b.chapter)
     );
 
+    let temp = chapterSorted;
+
+    // quiz slicing (same logic you had)
     if (filters.quiz !== "all") {
       const quizNumber = parseInt(filters.quiz.replace("quiz", ""), 10);
+      let startIndex = 0;
+      let endIndex = chapterSorted.length;
 
-      if (quizNumber >= 1 && quizNumber <= 6) {
-        let startIndex = 0;
-        let endIndex = chapterSortedQuestions.length;
-
-        if (quizNumber === 1) {
-          startIndex = 0;
-          endIndex = 115;
-        } else if (quizNumber === 2) {
-          startIndex = 115;
-          endIndex = 230;
-        } else if (quizNumber === 3) {
-          startIndex = 230;
-          endIndex = 345;
-        } else if (quizNumber === 4) {
-          startIndex = 345;
-          endIndex = 460;
-        } else if (quizNumber === 5) {
-          startIndex = 460;
-          endIndex = 575;
-        } else {
-          startIndex = 575;
-          endIndex = chapterSortedQuestions.length;
-        }
-
-        tempQuestions = chapterSortedQuestions.slice(startIndex, endIndex);
-      } else {
-        tempQuestions = chapterSortedQuestions;
+      if (quizNumber === 1) {
+        startIndex = 0;
+        endIndex = 115;
+      } else if (quizNumber === 2) {
+        startIndex = 115;
+        endIndex = 230;
+      } else if (quizNumber === 3) {
+        startIndex = 230;
+        endIndex = 345;
+      } else if (quizNumber === 4) {
+        startIndex = 345;
+        endIndex = 460;
+      } else if (quizNumber === 5) {
+        startIndex = 460;
+        endIndex = 575;
+      } else if (quizNumber === 6) {
+        startIndex = 575;
+        endIndex = chapterSorted.length;
       }
-    } else {
-      tempQuestions = chapterSortedQuestions;
+
+      temp = chapterSorted.slice(startIndex, endIndex);
     }
 
     if (filters.recentOnly) {
       const cutoff = new Date(Date.now() - RECENT_DAYS * 24 * 60 * 60 * 1000);
-      tempQuestions = tempQuestions.filter((q) => {
+      temp = temp.filter((q) => {
         const d = getCreatedAtDate((q as any).createdAt);
         return d ? d >= cutoff : false;
       });
@@ -175,37 +326,48 @@ export default function Home() {
 
     if (searchQuery) {
       const sq = searchQuery.toLowerCase();
-      tempQuestions = tempQuestions.filter((q) => q.questionText?.toLowerCase().includes(sq));
+      temp = temp.filter((q) => q.questionText?.toLowerCase().includes(sq));
     }
 
     if (filters.showSavedOnly) {
-      tempQuestions = tempQuestions.filter((q) => savedQuestionIds.includes(q.id));
+      temp = temp.filter((q) => savedQuestionIds.includes(q.id));
     }
 
     if (filters.chapter.length > 0) {
-      tempQuestions = tempQuestions.filter((q) => filters.chapter.includes(q.chapter));
+      temp = temp.filter((q) => filters.chapter.includes(q.chapter));
     }
+
     if (filters.questionType.length > 0) {
-      tempQuestions = tempQuestions.filter((q) =>
-        filters.questionType.includes(q.questionType)
-      );
+      temp = temp.filter((q) => filters.questionType.includes(q.questionType));
     }
 
-    const sortedQuestions = [...tempQuestions].sort((a, b) => {
-      switch (sort) {
-        case "chapter_desc":
-          return getChapterNumber(b.chapter) - getChapterNumber(a.chapter);
-        case "random":
-          return Math.random() - 0.5;
-        case "chapter_asc":
-        default:
-          return 0;
-      }
-    });
+    // ✅ grouping toggle
+    if (filters.groupSimilarOptions) {
+      const isSimilar = (q: Question) => !!similarMetaById.get(q.id)?.hasSimilar;
 
-    setFilteredQuestions(sortedQuestions);
+      const similarBucket = temp.filter(isSimilar);
+      const otherBucket = temp.filter((q) => !isSimilar(q));
+
+      const orderedSimilar = orderSimilarQuestions(similarBucket);
+      const orderedOther = sortWithin(otherBucket);
+
+      setFilteredQuestions([...orderedSimilar, ...orderedOther]);
+      setUserAnswers({});
+      return;
+    }
+
+    setFilteredQuestions(sortWithin(temp));
     setUserAnswers({});
-  }, [searchQuery, filters, questions, sort, isExamMode, savedQuestionIds]);
+  }, [
+    isExamMode,
+    questions,
+    filters,
+    searchQuery,
+    savedQuestionIds,
+    similarMetaById,
+    orderSimilarQuestions,
+    sortWithin,
+  ]);
 
   React.useEffect(() => {
     const onWinScroll = () => setShowBackToTop(window.scrollY > 200);
@@ -272,22 +434,19 @@ export default function Home() {
   };
 
   const handleQuestionsAdded = (newQuestions: Question[]) => {
-    const combinedQuestions = [...questions];
+    const combined = [...questions];
     newQuestions.forEach((newQ) => {
-      const index = combinedQuestions.findIndex((q) => q.id === newQ.id);
-      if (index !== -1) {
-        combinedQuestions[index] = newQ;
-      } else {
-        combinedQuestions.push(newQ);
-      }
+      const idx = combined.findIndex((q) => q.id === newQ.id);
+      if (idx !== -1) combined[idx] = newQ;
+      else combined.push(newQ);
     });
 
-    combinedQuestions.sort(
+    combined.sort(
       (a: any, b: any) =>
         (getCreatedAtDate(b?.createdAt)?.getTime() ?? 0) -
         (getCreatedAtDate(a?.createdAt)?.getTime() ?? 0)
     );
-    setQuestions(combinedQuestions);
+    setQuestions(combined);
   };
 
   const handleQuestionDeleted = (questionId: string) => {
@@ -304,9 +463,7 @@ export default function Home() {
     );
   };
 
-  const scrollToTop = () => {
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  };
+  const scrollToTop = () => window.scrollTo({ top: 0, behavior: "smooth" });
 
   const clearAllFilters = () => {
     setFilters({ ...initialFilters });
@@ -315,10 +472,7 @@ export default function Home() {
 
   return (
     <LockProvider>
-      <div
-        className="flex min-h-screen w-full max-w-full overflow-x-hidden bg-background text-foreground"
-        ref={pageRef}
-      >
+      <div className="flex min-h-screen w-full max-w-full overflow-x-hidden bg-background text-foreground" ref={pageRef}>
         <FilterSheet
           isOpen={isFilterSheetOpen}
           setIsOpen={setIsFilterSheetOpen}
@@ -332,7 +486,6 @@ export default function Home() {
         />
 
         <div className="flex-1 flex flex-col w-full max-w-full overflow-x-hidden">
-          {/* Header */}
           <div className="sticky top-0 z-30 w-full">
             <div
               className={cn(
@@ -357,9 +510,7 @@ export default function Home() {
                 <Button
                   variant="outline"
                   size="icon"
-                  className={cn(
-                    "absolute right-4 -bottom-4 z-20 rounded-full h-8 w-8 border-2 border-background"
-                  )}
+                  className={cn("absolute right-4 -bottom-4 z-20 rounded-full h-8 w-8 border-2 border-background")}
                   onClick={() => setIsHeaderVisible((prev) => !prev)}
                 >
                   <ChevronUp className="h-4 w-4" />
@@ -367,13 +518,12 @@ export default function Home() {
                 </Button>
               )}
             </div>
+
             {isMobile && !isHeaderVisible && (
               <Button
                 variant="outline"
                 size="icon"
-                className={cn(
-                  "absolute right-4 top-2 z-20 rounded-full h-8 w-8 border-2 border-background"
-                )}
+                className={cn("absolute right-4 top-2 z-20 rounded-full h-8 w-8 border-2 border-background")}
                 onClick={() => setIsHeaderVisible((prev) => !prev)}
               >
                 <ChevronDown className="h-4 w-4" />
@@ -382,7 +532,6 @@ export default function Home() {
             )}
           </div>
 
-          {/* Main Content */}
           <main className="flex-1 w-full max-w-full overflow-x-hidden">
             {isLoading ? (
               <div className="p-4 space-y-4 max-w-full lg:max-w-screen-lg mx-auto">
@@ -413,7 +562,6 @@ export default function Home() {
           <Footer />
         </div>
 
-        {/* Side Panels */}
         {selectedQuestionForExplanation && (
           <ExplanationPanel
             isOpen={isExplanationPanelOpen}
@@ -421,6 +569,7 @@ export default function Home() {
             question={selectedQuestionForExplanation}
           />
         )}
+
         {showBackToTop && <BackToTopButton onClick={scrollToTop} />}
 
         <ExamOptionsDialog
@@ -429,7 +578,6 @@ export default function Home() {
           onStartExam={startExam}
         />
 
-        {/* Exam Results Dialog */}
         <AlertDialog open={isResultsDialogOpen} onOpenChange={setIsResultsDialogOpen}>
           <AlertDialogContent>
             <AlertDialogHeader>
