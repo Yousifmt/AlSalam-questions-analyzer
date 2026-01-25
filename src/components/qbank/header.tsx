@@ -74,19 +74,20 @@ export default function Header({
   const [isPasteDialogOpen, setIsPasteDialogOpen] = React.useState(false);
   const [isUnlockDialogOpen, setIsUnlockDialogOpen] = React.useState(false);
   const [isExportDialogOpen, setIsExportDialogOpen] = React.useState(false);
+
   const { theme, setTheme } = useTheme();
   const { isLocked } = useLock();
-  const [mounted, setMounted] = React.useState(false);
-  const { toast } = useToast();
   const router = useRouter();
+  const { toast } = useToast();
 
-  React.useEffect(() => {
-    setMounted(true);
-  }, []);
+  const [mounted, setMounted] = React.useState(false);
+  React.useEffect(() => setMounted(true), []);
 
   const handleToggleAnswers = () => setShowAllAnswers((prev) => !prev);
 
   const handleExportClick = () => {
+    if (isExamMode) return;
+
     if (filteredQuestions.length === 0) {
       toast({
         title: "No questions to export",
@@ -95,13 +96,35 @@ export default function Header({
       });
       return;
     }
+
+    // ✅ Students (LOCKED): export immediately with current filtered list
+    if (isLocked) {
+      try {
+        sessionStorage.setItem(
+          "questionsForExport",
+          JSON.stringify(filteredQuestions)
+        );
+        router.push("/export");
+      } catch (error) {
+        console.error("Failed to save questions to sessionStorage", error);
+        toast({
+          title: "Export Failed",
+          description:
+            "Could not prepare export. Your browser may have storage restrictions.",
+          variant: "destructive",
+        });
+      }
+      return;
+    }
+
+    // ✅ Admin (UNLOCKED): show export options dialog
     setIsExportDialogOpen(true);
   };
 
   return (
     <>
       <header className="flex-shrink-0 border-b border-border p-4 flex flex-col md:flex-row items-center justify-between gap-4 bg-background/80 backdrop-blur-sm">
-        {/* Left: Title + lock status */}
+        {/* Left */}
         <div className="flex items-center gap-2 w-full md:w-auto justify-between md:justify-start">
           <h2 className="font-headline text-xl md:text-2xl">
             <span className="text-primary font-bold">Al-Salam</span>
@@ -119,7 +142,7 @@ export default function Header({
           </span>
         </div>
 
-        {/* Center: Filters + Search */}
+        {/* Center */}
         <div className="w-full md:flex-1 flex flex-col md:flex-row items-center gap-2 md:gap-4">
           <div className="flex items-center gap-2 w-full">
             <Button
@@ -156,7 +179,6 @@ export default function Header({
               )}
             </div>
 
-            {/* Desktop question count */}
             <span
               className={cn(
                 "text-xs sm:text-sm text-foreground whitespace-nowrap hidden md:inline-block",
@@ -172,9 +194,8 @@ export default function Header({
           </div>
         </div>
 
-        {/* Right: Primary CTAs + essentials + unlocked dropdown */}
+        {/* Right */}
         <div className="w-full md:w-auto flex flex-col md:flex-row items-end md:items-center justify-end gap-1 md:gap-2">
-          {/* Buttons row (same الترتيب السابق) */}
           <div className="flex w-full md:w-auto items-center justify-end gap-2">
             {isExamMode ? (
               <Button onClick={onResetView} variant="destructive" size="sm">
@@ -205,6 +226,19 @@ export default function Header({
               <span>{showAllAnswers ? "Hide Answers" : "Show Answers"}</span>
             </Button>
 
+            {/* ✅ Export always visible, behavior changes by lock state */}
+            <Button
+              variant="outline"
+              size="icon"
+              className={cn("w-9 h-9", outlineStrong)}
+              onClick={handleExportClick}
+              disabled={isExamMode || filteredQuestions.length === 0}
+              aria-label={isLocked ? "Export questions" : "Export options"}
+              title={isLocked ? "Export" : "Export options (admin)"}
+            >
+              <Download className="h-5 w-5" />
+            </Button>
+
             <Button
               variant="outline"
               size="sm"
@@ -231,6 +265,7 @@ export default function Header({
               {isLocked ? <Lock /> : <Unlock />}
             </Button>
 
+            {/* Admin-only dropdown */}
             {!isLocked && !isExamMode && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -238,11 +273,12 @@ export default function Header({
                     variant="outline"
                     size="icon"
                     className={cn("w-9 h-9", outlineStrong)}
-                    aria-label="Open actions"
+                    aria-label="Open admin actions"
                   >
                     <EllipsisVertical className="h-5 w-5" />
                   </Button>
                 </DropdownMenuTrigger>
+
                 <DropdownMenuContent
                   align="end"
                   sideOffset={8}
@@ -253,45 +289,35 @@ export default function Header({
                   )}
                 >
                   <DropdownMenuLabel className="text-xs uppercase tracking-wide opacity-80">
-                    Question tools
+                    Admin tools
                   </DropdownMenuLabel>
 
                   <DropdownMenuItem onSelect={() => setIsPasteDialogOpen(true)}>
                     <PlusCircle className="mr-2 h-4 w-4" /> Add questions
                   </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={handleExportClick}>
-                    <Download className="mr-2 h-4 w-4" /> Export
-                  </DropdownMenuItem>
+
                   <DropdownMenuItem onSelect={() => router.push("/categorize")}>
                     <Wand2 className="mr-2 h-4 w-4" /> Batch categorize
                   </DropdownMenuItem>
+
                   <DropdownMenuItem onSelect={() => router.push("/duplicates")}>
                     <CopyCheck className="mr-2 h-4 w-4" /> Show duplicates
                   </DropdownMenuItem>
+
                   <DropdownMenuSeparator />
 
                   <DropdownMenuItem onSelect={() => setIsUnlockDialogOpen(true)}>
-                    {isLocked ? (
-                      <>
-                        <Unlock className="mr-2 h-4 w-4" /> Unlock features…
-                      </>
-                    ) : (
-                      <>
-                        <Lock className="mr-2 h-4 w-4" /> Lock editing
-                      </>
-                    )}
+                    <Lock className="mr-2 h-4 w-4" /> Lock editing
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
           </div>
 
-          {/* Mobile question count تحت زر Exam مباشرة */}
           <span
-            className={cn(
-              "text-xs text-foreground md:hidden",
-              { "font-bold text-primary": isExamMode }
-            )}
+            className={cn("text-xs text-foreground md:hidden", {
+              "font-bold text-primary": isExamMode,
+            })}
           >
             {isExamMode
               ? "Exam Mode"
@@ -307,10 +333,13 @@ export default function Header({
         setIsOpen={setIsPasteDialogOpen}
         onQuestionsAdded={onQuestionsAdded}
       />
+
       <UnlockDialog
         isOpen={isUnlockDialogOpen}
         setIsOpen={setIsUnlockDialogOpen}
       />
+
+      {/* ✅ Export Options dialog ONLY admin (unlocked) can reach because we never open it while locked */}
       <ExportOptionsDialog
         isOpen={isExportDialogOpen}
         setIsOpen={setIsExportDialogOpen}
