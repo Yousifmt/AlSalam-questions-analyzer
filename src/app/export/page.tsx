@@ -43,63 +43,110 @@ export default function ExportPage() {
     }
   }, [toast, router]);
 
+  // ✅ UPDATED: output MUST be compatible with quiz-builder parser
+  // - DO NOT prefix question with "1." (your option regex treats "1." as an option line)
+  // - Options: "A. ..." "B. ..."
+  // - Answer: "Answer: A,C" (letters glued or comma-separated)
   const generatePlainText = (questionsToExport: Question[]): string => {
+    const buildAnswerLine = (q: Question): string | null => {
+      if (!q.correctAnswer) return null;
+
+      if (q.options && q.options.length > 0) {
+        const correctAnswers = Array.isArray(q.correctAnswer)
+          ? q.correctAnswer
+          : [q.correctAnswer];
+
+        const letters = correctAnswers
+          .map((ans) => {
+            const idx = q.options?.indexOf(ans ?? "");
+            return idx !== undefined && idx >= 0 ? String.fromCharCode(65 + idx) : "";
+          })
+          .filter(Boolean);
+
+        if (letters.length) return `Answer: ${letters.join(",")}`;
+
+        // fallback: maybe correctAnswer already contains A / A,C etc
+        if (typeof q.correctAnswer === "string" && q.correctAnswer.trim()) {
+          return `Answer: ${q.correctAnswer.trim().replace(/\s+/g, "")}`;
+        }
+        if (Array.isArray(q.correctAnswer) && q.correctAnswer.length) {
+          const cleaned = q.correctAnswer
+            .map((x) => String(x ?? "").trim())
+            .filter(Boolean)
+            .join(",");
+          return cleaned ? `Answer: ${cleaned.replace(/\s+/g, "")}` : null;
+        }
+        return null;
+      }
+
+      // no options, still emit Answer for consistency
+      return `Answer: ${
+        Array.isArray(q.correctAnswer)
+          ? q.correctAnswer.map((x) => String(x ?? "").trim()).join(",")
+          : String(q.correctAnswer ?? "").trim()
+      }`;
+    };
+
     return questionsToExport
-      .map((q, idx) => {
-        let questionText = `${idx + 1}. ${q.questionText ?? ""}`;
+      .map((q) => {
+        const qLine = (q.questionText ?? "").toString().trim();
+        if (!qLine) return "";
+
+        let block = qLine; // IMPORTANT: no numbering here
 
         if (q.options && q.options.length > 0) {
           const optionsText = q.options
-            .map((opt, i) => `${String.fromCharCode(65 + i)}. ${opt}`)
+            .map((opt, i) => `${String.fromCharCode(65 + i)}. ${String(opt ?? "").trim()}`)
             .join("\n");
-          questionText += `\n${optionsText}`;
+          block += `\n${optionsText}`;
         }
 
-        if (q.correctAnswer) {
-          let answerText = `Answer: `;
-          if (q.options && q.options.length > 0) {
-            const correctAnswers = Array.isArray(q.correctAnswer)
-              ? q.correctAnswer
-              : [q.correctAnswer];
+        const ans = buildAnswerLine(q);
+        if (ans) block += `\n${ans}`;
 
-            const answerLetters = correctAnswers
-              .map((ans) => {
-                const index = q.options?.indexOf(ans ?? "");
-                return index !== -1 ? String.fromCharCode(65 + (index ?? 0)) : "";
-              })
-              .filter(Boolean)
-              .join(", ");
-
-            answerText +=
-              answerLetters ||
-              (Array.isArray(q.correctAnswer)
-                ? q.correctAnswer.join(", ")
-                : q.correctAnswer);
-          } else {
-            answerText += Array.isArray(q.correctAnswer)
-              ? q.correctAnswer.join(", ")
-              : q.correctAnswer;
-          }
-          questionText += `\n${answerText}`;
-        }
-
-        return questionText;
+        return block.trim();
       })
+      .filter(Boolean)
       .join("\n\n");
+  };
+
+  // ✅ UPDATED: clipboard copy with iOS / permission fallback
+  const copyTextWithFallback = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.setAttribute("readonly", "true");
+        ta.style.position = "fixed";
+        ta.style.left = "-9999px";
+        ta.style.top = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        ta.setSelectionRange(0, ta.value.length);
+        const ok = document.execCommand("copy");
+        document.body.removeChild(ta);
+        return ok;
+      } catch {
+        return false;
+      }
+    }
   };
 
   const handleCopy = async () => {
     if (!questions.length) return;
 
     const plainText = generatePlainText(questions);
-    try {
-      await navigator.clipboard.writeText(plainText);
+    const ok = await copyTextWithFallback(plainText);
+
+    if (ok) {
       toast({
-        title: "Copied!",
-        description: `${questions.length} questions copied as text.`,
+        title: "Copied for Import!",
+        description: `${questions.length} question block(s) copied (parser-compatible).`,
       });
-    } catch (err) {
-      console.error(err);
+    } else {
       toast({
         title: "Copy failed",
         description: "Clipboard permission was blocked by the browser.",
@@ -116,27 +163,41 @@ export default function ExportPage() {
   return (
     <div className="min-h-screen bg-background text-foreground print:bg-white print:text-black">
       {/* Screen header (hidden in print) */}
-      <header className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-background/80 p-4 backdrop-blur-sm print:hidden">
-        <Button variant="outline" onClick={() => router.back()}>
-          <ArrowLeft className="mr-2 h-4 w-4" />
-          Back
-        </Button>
+      <header className="sticky top-0 z-10 border-b border-border bg-background/80 backdrop-blur-sm print:hidden">
+        {/* ✅ UPDATED: better mobile layout for buttons */}
+        <div className="p-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-center justify-between gap-2">
+            <Button variant="outline" onClick={() => router.back()} className="h-10">
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Back
+            </Button>
 
-        <h1 className="font-headline text-2xl">Exported Questions</h1>
+            <h1 className="font-headline text-lg sm:text-2xl">Exported Questions</h1>
 
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            onClick={handleExportPdf}
-            disabled={!questions.length || isLoading}
-          >
-            <Printer className="mr-2 h-4 w-4" />
-            Export PDF
-          </Button>
-          <Button onClick={handleCopy} disabled={!questions.length || isLoading}>
-            <Copy className="mr-2 h-4 w-4" />
-            Copy as Text
-          </Button>
+            {/* spacer to balance row on mobile */}
+            <div className="w-[92px] sm:hidden" aria-hidden />
+          </div>
+
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-2">
+            <Button
+              variant="outline"
+              onClick={handleExportPdf}
+              disabled={!questions.length || isLoading}
+              className="h-10 w-full sm:w-auto"
+            >
+              <Printer className="mr-2 h-4 w-4" />
+              Export PDF
+            </Button>
+
+            <Button
+              onClick={handleCopy}
+              disabled={!questions.length || isLoading}
+              className="h-10 w-full sm:w-auto"
+            >
+              <Copy className="mr-2 h-4 w-4" />
+              Copy for Import
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -161,7 +222,7 @@ export default function ExportPage() {
         ) : (
           <div className="space-y-6">
             {questions.map((q, index) => (
-              <React.Fragment key={q.id || index}>
+              <React.Fragment key={(q as any).id || index}>
                 {/* ✅ SCREEN VERSION (cards) */}
                 <Card className="overflow-hidden print:hidden">
                   <CardContent className="p-6">
