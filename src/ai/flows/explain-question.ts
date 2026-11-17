@@ -6,6 +6,11 @@
  * - explainQuestion - A function that handles the question explanation process.
  * - ExplainQuestionInput - The input type for the explainQuestion function.
  * - ExplainQuestionOutput - The return type for the explainQuestion function.
+ *
+ * ⚡ Speed notes:
+ * - Thinking is turned off (gemini-3.8-flash thinks at "medium" by default, which adds seconds).
+ * - The model scans the question and explains each acronym found in it ("shortcutMeanings").
+ * - The prompt defines exactly how long "short" and "full" are, so fewer tokens are generated.
  */
 
 import { ai } from '@/ai/genkit';
@@ -26,8 +31,9 @@ const ExplainQuestionInputSchema = z.object({
 export type ExplainQuestionInput = z.infer<typeof ExplainQuestionInputSchema>;
 
 const ShortcutMeaningSchema = z.object({
-  shortcut: z.string().describe('The acronym/shortcut as it appears (e.g., CPU, ECG).'),
-  meaning: z.string().describe('The meaning/expansion of the shortcut in the target language.'),
+  shortcut: z.string().describe('The acronym/shortcut exactly as it appears in the question (e.g., CPU, IPsec, WPA3).'),
+  meaning: z.string().describe('The full name/expansion of the shortcut, in the target language.'),
+  explanation: z.string().optional().describe('A brief explanation (one short sentence) of what it is, in the target language.'),
 });
 
 const ExplainQuestionOutputSchema = z.object({
@@ -43,9 +49,52 @@ const ExplainQuestionOutputSchema = z.object({
     )
     .optional()
     .describe('Reasons why other options are wrong, if the question is multiple choice.'),
-  shortcutMeanings: z.array(ShortcutMeaningSchema).optional().describe('Meanings of any shortcuts/acronyms mentioned.'),
+  shortcutMeanings: z.array(ShortcutMeaningSchema).optional().describe('Acronyms found in the question, each with its meaning and a brief explanation.'),
 });
 export type ExplainQuestionOutput = z.infer<typeof ExplainQuestionOutputSchema>;
+
+// Extra fields prepared by the flow (not sent by the client)
+const PromptInputSchema = ExplainQuestionInputSchema.extend({
+  optionsText: z.string(),
+  correctAnswerText: z.string(),
+  candidates: z.string(),
+});
+
+/* =========================
+ * Local scan (safety net so no acronym is skipped)
+ * ========================= */
+
+const STOP_WORDS = new Set([
+  'AND', 'OR', 'NOT', 'THE', 'ALL', 'ANY', 'NONE', 'YES', 'NO', 'TRUE', 'FALSE', 'NOTE',
+  'EXCEPT', 'ONLY', 'BOTH', 'NEITHER', 'OF', 'IN', 'ON', 'TO', 'IS', 'ARE', 'IT', 'AS', 'AT',
+  'BY', 'IF', 'SO', 'WHICH', 'WHAT', 'WHEN', 'WHERE', 'WHY', 'HOW', 'THIS', 'THAT', 'WITH',
+  'FROM', 'LEAST', 'MOST', 'BEST', 'NEXT',
+]);
+
+/** يدوّر في السؤال والخيارات والإجابة والشرح على أي كلمة شكلها اختصار (حرفين كبار أو أكثر) */
+function detectCandidates(input: ExplainQuestionInput): string[] {
+  const text = [
+    input.questionText,
+    ...(input.options ?? []),
+    Array.isArray(input.correctAnswer) ? input.correctAnswer.join(' ') : input.correctAnswer ?? '',
+    input.explanation ?? '',
+  ].join(' \n ');
+
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const m of text.matchAll(/[A-Za-z][A-Za-z0-9]{1,9}/g)) {
+    const t = m[0];
+    if ((t.match(/[A-Z]/g) ?? []).length < 2) continue; // لازم حرفين كبار على الأقل
+    const allCaps = t === t.toUpperCase();
+    if (allCaps && STOP_WORDS.has(t)) continue;
+    if (allCaps && /^[A-Z]+$/.test(t) && t.length > 7) continue; // كلمة عادية مكتوبة بحروف كبيرة
+    if (seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+    if (out.length >= 20) break;
+  }
+  return out;
+}
 
 /* =========================
  * Public API
@@ -61,8 +110,14 @@ export async function explainQuestion(input: ExplainQuestionInput): Promise<Expl
 
 const prompt = ai.definePrompt({
   name: 'explainQuestionPrompt',
-  input: { schema: ExplainQuestionInputSchema },
+  input: { schema: PromptInputSchema },
   output: { schema: ExplainQuestionOutputSchema },
+  config: {
+    temperature: 0.3,
+    // ⚡ أهم سطر للسرعة: يوقف "التفكير" الداخلي للموديل.
+    // لو طلع لك خطأ 400 بخصوص thinking، بدّله بـ: thinkingConfig: { thinkingLevel: 'LOW' }
+    thinkingConfig: { thinkingBudget: 0 },
+  },
   prompt: `You explain exam questions for students.
 Output only the requested JSON object (no prose, no markdown).
 Be concise, accurate, and didactic.
@@ -70,83 +125,45 @@ Do not reveal internal reasoning or chain-of-thought.
 
 LANGUAGE RULE:
 - Respect LANGUAGE={{{language}}} ("ar" or "en") for all free-text fields.
+- In Arabic, keep technical terms and acronyms in English letters (e.g., TLS, CRL, firewall).
+
+SHORTCUTS RULE (scan the question):
+- Scan EACH of these sources separately, one after the other: (1) the Question, (2) EVERY option, (3) the Correct Answer, (4) the Existing Explanation. Acronyms that appear only in an option or only in the answer count too.
+- Look for acronyms/abbreviations in any letter case (e.g., TLS, CRL, IPsec, WPA3, SaaS, IoT).
+- A local scan found these candidates: {{{candidates}}}
+  Cover EVERY candidate that is a real acronym/abbreviation/technical short name. Skip only plain words, product names, or people names. Also add any acronym the scan missed.
+- Do NOT include acronyms that only appear in your own answer.
+- Return each acronym once in "shortcutMeanings": { "shortcut", "meaning", "explanation" }.
+  - shortcut: exactly as written in the question.
+  - meaning: the full name, written in LANGUAGE={{{language}}} (keep the English name in Latin letters if there is no common translation).
+  - explanation: ONE short sentence in LANGUAGE={{{language}}} saying what it is or does in this context.
+- Maximum 12 items, in order of appearance. Return [] only if there truly are none.
+- In "generalExplanation" and "correctAnswerExplanation" write acronyms plainly (e.g., "CRL") without expanding them; the app adds the meaning automatically.
 
 MCQ RULE:
-- If the question is MCQ, include detailed "whyOthersWrong"; otherwise return [].
+- If the question is MCQ, "whyOthersWrong" must cover EVERY incorrect option, one item per option; otherwise return [].
 
-SHORTCUTS RULES (INLINE ALLOWED):
-- You MAY mention shortcuts/acronyms and their expansions inline inside "generalExplanation" and "correctAnswerExplanation" when it improves clarity.
-  Example (en): "... use CRL (Certificate Revocation List) to publish revoked certs ..."
-  Example (ar): "... تُستخدم CRL (قائمة إبطال الشهادات) لنشر الشهادات المُبطلة ..."
-- ALSO build "shortcutMeanings" by scanning Question/Options/Existing Explanation for any 2–6 uppercase tokens (e.g., SSL, TLS, OCSP, CRL, CA, CSR, PKI, TPM, CPU, RAM).
-- For each detected shortcut, add one item to "shortcutMeanings": { "shortcut": string, "meaning": string }.
-- The "meaning" MUST be written in LANGUAGE={{{language}}}.
-- If the meaning is unknown, set "meaning" to a clear placeholder ("غير مذكور" in ar, "not provided" in en).
-- Do not duplicate shortcuts; return each shortcut at most once.
+LENGTH RULE (follow strictly):
+- LEVEL=short: generalExplanation = 2–3 sentences; correctAnswerExplanation = 2–3 sentences; each "reason" = ONE short sentence.
+- LEVEL=full: generalExplanation = 4–6 sentences with background; correctAnswerExplanation = detailed, with a brief example; each "reason" = 1–2 sentences.
 
 Return EXACTLY this JSON shape (no extra fields):
 {
   "language": "ar" | "en",
   "generalExplanation": string,
   "correctAnswerExplanation": string,
-  "whyOthersWrong": array,   // [] if not MCQ
-  "shortcutMeanings": array  // [] if none detected
+  "whyOthersWrong": [ { "option": string, "reason": string } ],   // [] if not MCQ
+  "shortcutMeanings": [ { "shortcut": string, "meaning": string, "explanation": string } ]   // [] if none
 }
 
 Explain the following question at LEVEL={{{level}}} in LANGUAGE={{{language}}}.
-The explanation should have three parts:
-1) generalExplanation: high-level concept (you MAY include inline acronym expansions).
-2) correctAnswerExplanation: why the correct answer is correct (you MAY include inline acronym expansions).
-3) whyOthersWrong: for MCQs, analyze every incorrect option; otherwise return [].
 
 Question: {{{questionText}}}
-Options: {{#if options}}{{{options}}}{{else}}N/A{{/if}}
-Correct Answer: {{#if correctAnswer}}{{{correctAnswer}}}{{else}}N/A{{/if}}
+Options:
+{{{optionsText}}}
+Correct Answer: {{{correctAnswerText}}}
 Existing Explanation (if any): {{#if explanation}}{{{explanation}}}{{else}}N/A{{/if}}`,
 });
-
-
-/* =========================
- * Helpers (Post-process)
- * ========================= */
-
-/**
- * Extracts patterns like:
- *   CPU (Central Processing Unit)
- *   ECG (electrocardiogram)
- * and removes the parenthetical expansion from the text.
- */
-function extractFromText(
-  text: string,
-): { cleaned: string; pairs: Array<{ shortcut: string; meaning: string }> } {
-  if (!text) return { cleaned: text ?? '', pairs: [] };
-
-  const pairs: Array<{ shortcut: string; meaning: string }> = [];
-  let cleaned = text;
-
-  // Pattern 1: ABCD (Meaning ...)
-  const parenRe = /\b([A-Z]{2,6})\b\s*\(([^)]+)\)/g;
-  cleaned = cleaned.replace(parenRe, (_m, sc, meaning) => {
-    pairs.push({ shortcut: String(sc), meaning: String(meaning).trim() });
-    return sc; // keep acronym only
-  });
-
-  // Pattern 2 (optional): ABCD = Meaning / ABCD: Meaning
-  const assignRe = /\b([A-Z]{2,6})\b\s*(?:=|:)\s*([A-Za-z][^.;,\n]+)/g;
-  cleaned = cleaned.replace(assignRe, (_m, sc, meaning) => {
-    pairs.push({ shortcut: String(sc), meaning: String(meaning).trim() });
-    return sc; // keep acronym only
-  });
-
-  return { cleaned, pairs };
-}
-
-/** Deduplicate by shortcut (last one wins) */
-function dedupePairs(pairs: Array<{ shortcut: string; meaning: string }>) {
-  const map = new Map<string, string>();
-  for (const p of pairs) map.set(p.shortcut.toUpperCase(), p.meaning);
-  return Array.from(map.entries()).map(([shortcut, meaning]) => ({ shortcut, meaning }));
-}
 
 /* =========================
  * Flow
@@ -159,39 +176,48 @@ const explainQuestionFlow = ai.defineFlow(
     outputSchema: ExplainQuestionOutputSchema,
   },
   async (input) => {
-    const { output } = await prompt(input);
+    const optionsText =
+      input.options && input.options.length > 0
+        ? input.options.map((o) => `- ${o}`).join('\n')
+        : 'N/A';
+    const correctAnswerText = Array.isArray(input.correctAnswer)
+      ? input.correctAnswer.join('; ')
+      : input.correctAnswer || 'N/A';
+    const candidates = detectCandidates(input).join(', ') || 'none';
 
-    // Ensure base fields exist
-    let language = output?.language ?? input.language;
-    let generalExplanation = output?.generalExplanation ?? '';
-    let correctAnswerExplanation = output?.correctAnswerExplanation ?? '';
+    const { output } = await prompt({ ...input, optionsText, correctAnswerText, candidates });
+
+    // رد فاضي = خطأ حقيقي، نخلي الواجهة تعرض "Try again" بدل ما تحفظ شرح فاضي في الكاش
+    if (!output || !output.generalExplanation?.trim() || !output.correctAnswerExplanation?.trim()) {
+      throw new Error('The AI returned an empty explanation. Please try again.');
+    }
+
     const isMCQ = Array.isArray(input.options) && input.options.length > 0;
 
-    // Gather model-provided shortcuts (preferred path)
-    let shortcutMeanings: Array<{ shortcut: string; meaning: string }> =
-      (output?.shortcutMeanings ?? []).slice();
-
-    // Post-process: capture any inline expansions the model might still include
-    // from generalExplanation and correctAnswerExplanation, and strip them.
-    const g = extractFromText(generalExplanation);
-    generalExplanation = g.cleaned;
-    const c = extractFromText(correctAnswerExplanation);
-    correctAnswerExplanation = c.cleaned;
-
-    shortcutMeanings = dedupePairs([...shortcutMeanings, ...g.pairs, ...c.pairs]);
-
-    // NOTE: ترجمة المعاني للعربية تُطلب من الموديل عبر الـprompt أعلاه.
-    // في حال خالفت المخرجات ذلك (وقد يحدث أحيانًا)، يمكنك لاحقًا إضافة طبقة ترجمة هنا.
+    // تنظيف الاختصارات: بدون تكرار، وبدون عناصر فاضية
+    const seen = new Set<string>();
+    const shortcutMeanings = (output.shortcutMeanings ?? [])
+      .map((s) => ({
+        shortcut: s.shortcut?.trim() ?? '',
+        meaning: s.meaning?.trim() ?? '',
+        explanation: s.explanation?.trim() || undefined,
+      }))
+      .filter((s) => {
+        const k = s.shortcut.toUpperCase();
+        if (!s.shortcut || !s.meaning || seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      })
+      .slice(0, 12);
 
     const normalized: ExplainQuestionOutput = {
-      language,
-      generalExplanation,
-      correctAnswerExplanation,
-      whyOthersWrong: isMCQ ? (output?.whyOthersWrong ?? []) : [],
+      language: output.language ?? input.language,
+      generalExplanation: output.generalExplanation.trim(),
+      correctAnswerExplanation: output.correctAnswerExplanation.trim(),
+      whyOthersWrong: isMCQ ? (output.whyOthersWrong ?? []) : [],
       shortcutMeanings,
     };
 
     return normalized;
   },
 );
-
